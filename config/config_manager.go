@@ -6,7 +6,59 @@ import (
 	//"gobgp/ribs"
 	"log"
 	"net/http"
+	"net"
+	"strconv"
+	"time"
 )
+
+type NeighborConfiguration struct {
+
+	ASNumber	int
+	PeerAddress	net.Addr
+	IPv4Enable	bool
+	IPv6Enable	bool
+	VPNv4Enable	bool
+	VPNv6Enable	bool
+	RouteServerClient	bool
+
+}
+
+type GlobalConfiguration struct {
+
+	ID 			net.Addr
+	MyAS		int
+	HoldTime	uint16
+	// need Capability
+
+}
+
+var globalConfig *GlobalConfigration
+var neighborsConfig map[net.Addr]*NeighborConfiguration = make(map[net.Addr]*NeighborConfiguration)
+
+func addNeighborConfiguration(neighborConfig *NeighborConfiguration){
+	addr := neighborConfig.PeerAddress
+	_, ok := neighborsConfig[addr]
+	if !ok {
+		neighborsConfig[addr] = neighborConfig
+	} else {
+		//TODO handle duplication error
+	}
+}
+
+func findNeighborConfiguration(addr net.Addr) NeighborConfiguration {
+
+	conf, ok := neighborsConfig[addr]
+	if !ok {
+		return nil
+	} else {
+		return conf
+	}
+}
+
+func setGlobalConfiguration(gConfig *GlobalConfiguration){
+	globalConfig = gConfig
+	// TODO send notification to handlers
+}
 
 func Config_for_Rest() {
 	rserver := RServer{}
@@ -57,6 +109,12 @@ func (rs *RServer) PostRouteServer(w rest.ResponseWriter, r *rest.Request) {
 		return
 	}
 	//c_rs <- rs
+	gConfig := &GlobalConfiguration{}
+	gConfig.ID = net.ResolveIPAddr(rserver.Router_id)
+	gConfig.MyAS = strconv.Atoi(rserver.Local_as)
+	gConfig.HoldTime = time.Second * 60
+	setGlobalConfiguration(gConfig)
+
 	*rs = rserver
 	w.WriteJson(&rserver)
 }
