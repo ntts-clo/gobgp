@@ -65,7 +65,7 @@ func (rs *RServer) PostRouteServer(w rest.ResponseWriter, r *rest.Request) {
 	gConfig.ID = net.ResolveIPAddr(rserver.Router_id)
 	gConfig.MyAS = strconv.Atoi(rserver.Local_as)
 	gConfig.HoldTime = time.Second * 60
-	setGlobalConfiguration(gConfig)
+	SetGlobalConfiguration(gConfig)
 
 	*rs = rserver
 	w.WriteJson(&rserver)

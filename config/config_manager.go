@@ -38,7 +38,7 @@ func NewConfigManger() *ConfigManager {
 	return manager
 }
 
-func (manager *ConfigManager) addNeighborConfiguration (neighborConfig *NeighborConfiguration){
+func (manager *ConfigManager) AddNeighborConfiguration (neighborConfig *NeighborConfiguration){
 	addr := neighborConfig.PeerAddress
 	_, ok := manager.neighborsConfig[addr]
 	if !ok {
@@ -48,7 +48,7 @@ func (manager *ConfigManager) addNeighborConfiguration (neighborConfig *Neighbor
 	}
 }
 
-func (manager *ConfigManager) findNeighborConfiguration(addr net.Addr) NeighborConfiguration {
+func (manager *ConfigManager) FindNeighborConfiguration(addr net.Addr) NeighborConfiguration {
 
 	conf, ok := manager.neighborsConfig[addr]
 	if !ok {
@@ -58,7 +58,7 @@ func (manager *ConfigManager) findNeighborConfiguration(addr net.Addr) NeighborC
 	}
 }
 
-func (manager *ConfigManager) setGlobalConfiguration(gConfig *GlobalConfiguration){
+func (manager *ConfigManager) SetGlobalConfiguration(gConfig *GlobalConfiguration){
 	manager.globalConfig = gConfig
 	// TODO send notification to handlers
 }

@@ -18,14 +18,14 @@ func StartCoreService() {
 	//
 }
 
-func GetNeighborConfiguration(peerAddr net.Addr) *NeighborConfiguration {
+func GetNeighbor(peerAddr net.Addr) *NeighborConfiguration {
 
 	nConfig := configManager.findNeighborConfiguration(peerAddr)
 	return nConfig
 
 }
 
-func AddNeighborConfiguration(nConfig *NeighborConfiguration) error {
+func AddNeighbor(nConfig *NeighborConfiguration) error {
 
 	peerAddr := nConfig.PeerAddress
 	if c := configManager.findNeighborConfiguration(peerAddr); c != nil {
@@ -35,4 +35,12 @@ func AddNeighborConfiguration(nConfig *NeighborConfiguration) error {
 
 }
 
+func UpdateNeighbor(nConfig *NeighborConfiguration) error {
 
+	peerAddr := nConfig.PeerAddress
+	if c := configManager.findNeighborConfiguration(peerAddr); c == nil {
+		return fmt.Errorf("Neighbor configuration doesn't exists.")
+	}
+	configManager.updateNeighborConfiguration(nConfig)
+
+}
