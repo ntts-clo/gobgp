@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bgp
+package packet
 
 import (
 	"encoding/binary"
@@ -91,6 +91,7 @@ func structName(m interface{}) string {
 
 type ParameterCapabilityInterface interface {
 	DecodeFromBytes([]byte) error
+	Encode() ([]byte, error)
 	Len() int
 }
 
@@ -293,6 +294,33 @@ func (msg *BGPOpen) DecodeFromBytes(data []byte) error {
 		data = data[2+paramlen:]
 	}
 	return nil
+}
+
+func (msg *BGPOpen) Encode() ([]byte, error) {
+
+	buf := make([]byte, 10)
+	buf[0] = byte(msg.Version)
+	binary.BigEndian.PutUint16(buf[1:3], msg.MyAS)
+	binary.BigEndian.PutUint16(buf[3:5], msg.HoldTime)
+	buf[5:9] = msg.ID
+	buf[9] = msg.OptParamLen
+
+	if msg.OptParamLen > 0 {
+
+		if msg.OptParamLen != uint8(len(msg.OptParams)) {
+			return nil, fmt.Errorf("Option parameter length mismatch")
+		}
+
+		for i, p := range msg.OptParams {
+			optBuf := make([]byte, 2 + p.ParamLen)
+			optBuf[0] = p.ParamType
+			optBuf[1] = p.ParamLen
+			optBuf[2:2 + p.ParamLen] = p.Value
+			buf = append(buf, optBuf)
+		}
+	}
+
+	return buf, nil
 }
 
 type AddrPrefixInterface interface {
@@ -1212,6 +1240,18 @@ func (msg *BGPHeader) DecodeFromBytes(data []byte) error {
 	return nil
 }
 
+func (msg *BGPHeader) Encode() ([]byte, error) {
+
+	data := make([]byte, 19)
+	for i, _ := range data[0:16] {
+		data[i] = uint8(1)
+	}
+
+	binary.BigEndian.PutUint16(data[16:18], msg.Len)
+	data[18] = msg.Type
+	return data, nil
+}
+
 type BGPMessage struct {
 	Header BGPHeader
 	Body   BGPBody
@@ -1241,6 +1281,16 @@ func ParseBGPMessage(data []byte) (*BGPMessage, error) {
 		return nil, err
 	}
 	return msg, nil
+}
+
+func SerializeBGPMessage(msg *BGPMessage) ([]byte, error){
+
+	header, err:= msg.Header.Encode()
+	body , err := msg.Body.Encode()
+	data := make([]byte, len(header) + len(body))
+	append(data, header, body)
+	return data, nil
+
 }
 
 // BMP

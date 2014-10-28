@@ -10,14 +10,18 @@ type RServer struct {
 	Local_as  string
 }
 type Neighbor struct {
-	Neighbor_id string
-	Ip_address  string
-	Remote_as   string
+	neighborConfiguration *NeighborConfiguration
+	stateMachine *BGPFiniteStateMachine
+
 }
+
+
 type Neighbors struct {
 	sync.RWMutex
 	Store map[string]*Neighbor
 }
+
+
 type Path struct {
 	Network   string
 	Next_hop  string
@@ -27,7 +31,12 @@ type Path struct {
 	As_path   string
 	Community string
 }
+
 type LocRib struct {
 	Neighbor_id string
 	Path_map    map[string]*Path
+}
+
+type Policy struct {
+
 }
