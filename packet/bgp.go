@@ -947,7 +947,7 @@ func (p *PathAttributeMpReachNLRI) DecodeFromBytes(data []byte) error {
 
 	value := p.PathAttribute.Value
 	afi := binary.BigEndian.Uint16(value[0:2])
-	safi := value[2]
+	safi := uint8(value[2])
 	nexthopLen := value[3]
 	nexthopbin := value[4 : 4+nexthopLen]
 	value = value[4+nexthopLen:]
@@ -983,7 +983,7 @@ func (p *PathAttributeMpUnreachNLRI) DecodeFromBytes(data []byte) error {
 
 	value := p.PathAttribute.Value
 	afi := binary.BigEndian.Uint16(value[0:2])
-	safi := value[2]
+	safi := uint8(value[2])
 	addrprefix := routeFamilyPrefix(afi, safi)
 	value = value[3:]
 	for len(value) > 0 {
@@ -1197,7 +1197,7 @@ func (msg *BGPNotification) DecodeFromBytes(data []byte) error {
 type BGPKeepAlive struct {
 }
 
-func (msg *BGPKeepAlive) DecodeFromBytes(data []byte) error {
+func (msg *BGPKeepAlive) DecodeFromBytes(_ []byte) error {
 	return nil
 }
 
@@ -1361,7 +1361,7 @@ type BMPRouteMonitoring struct {
 	BGPUpdate *BGPMessage
 }
 
-func (body *BMPRouteMonitoring) ParseBody(msg *BMPMessage, data []byte) error {
+func (body *BMPRouteMonitoring) ParseBody(data []byte) error {
 	update, err := ParseBGPMessage(data)
 	if err != nil {
 		return err
@@ -1406,7 +1406,7 @@ type BMPPeerDownNotification struct {
 	Data            []byte
 }
 
-func (body *BMPPeerDownNotification) ParseBody(msg *BMPMessage, data []byte) error {
+func (body *BMPPeerDownNotification) ParseBody(data []byte) error {
 	body.Reason = data[0]
 	data = data[1:]
 	if body.Reason == BMP_PEER_DOWN_REASON_LOCAL_BGP_NOTIFICATION || body.Reason == BMP_PEER_DOWN_REASON_REMOTE_BGP_NOTIFICATION {
@@ -1453,7 +1453,7 @@ func (body *BMPPeerUpNotification) ParseBody(msg *BMPMessage, data []byte) error
 	return nil
 }
 
-func (body *BMPStatisticsReport) ParseBody(msg *BMPMessage, data []byte) error {
+func (body *BMPStatisticsReport) ParseBody(data []byte) error {
 	_ = binary.BigEndian.Uint32(data[0:4])
 	data = data[4:]
 	for len(data) >= 4 {
@@ -1482,7 +1482,7 @@ type BMPInitiation struct {
 	Info []BMPTLV
 }
 
-func (body *BMPInitiation) ParseBody(msg *BMPMessage, data []byte) error {
+func (body *BMPInitiation) ParseBody(data []byte) error {
 	for len(data) >= 4 {
 		tlv := BMPTLV{}
 		tlv.Type = binary.BigEndian.Uint16(data[0:2])
@@ -1499,7 +1499,7 @@ type BMPTermination struct {
 	Info []BMPTLV
 }
 
-func (body *BMPTermination) ParseBody(msg *BMPMessage, data []byte) error {
+func (body *BMPTermination) ParseBody(data []byte) error {
 	for len(data) >= 4 {
 		tlv := BMPTLV{}
 		tlv.Type = binary.BigEndian.Uint16(data[0:2])
