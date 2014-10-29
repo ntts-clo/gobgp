@@ -91,7 +91,6 @@ func structName(m interface{}) string {
 
 type ParameterCapabilityInterface interface {
 	DecodeFromBytes([]byte) error
-	Encode() ([]byte, error)
 	Len() int
 }
 
@@ -257,7 +256,7 @@ type BGPOpen struct {
 	Version     uint8
 	MyAS        uint16
 	HoldTime    uint16
-	ID          net.IP
+	ID          []byte // net.IP
 	OptParamLen uint8
 	OptParams   []OptionParameterInterface
 }
@@ -302,7 +301,7 @@ func (msg *BGPOpen) Encode() ([]byte, error) {
 	buf[0] = byte(msg.Version)
 	binary.BigEndian.PutUint16(buf[1:3], msg.MyAS)
 	binary.BigEndian.PutUint16(buf[3:5], msg.HoldTime)
-	buf[5:9] = msg.ID
+	copy(buf[5:9], msg.ID)//buf[5:9] = msg.ID[0:4]
 	buf[9] = msg.OptParamLen
 
 	if msg.OptParamLen > 0 {
@@ -311,12 +310,51 @@ func (msg *BGPOpen) Encode() ([]byte, error) {
 			return nil, fmt.Errorf("Option parameter length mismatch")
 		}
 
-		for i, p := range msg.OptParams {
-			optBuf := make([]byte, 2 + p.ParamLen)
-			optBuf[0] = p.ParamType
-			optBuf[1] = p.ParamLen
-			optBuf[2:2 + p.ParamLen] = p.Value
-			buf = append(buf, optBuf)
+		for _, p := range msg.OptParams {
+
+			switch p.(type){
+			case OptionParameterCapability:
+				pCap := p.(OptionParameterCapability)
+				var optBuf []byte
+				optBuf = make([]byte, 2)
+				optBuf[0] = pCap.ParamType
+				optBuf[1] = pCap.ParamLen
+
+//				for j, cap := range pCap.Capability {
+//
+//					switch cap.(type){
+//					case CapRouteRefresh:
+//						t := cap.(CapRouteRefresh)
+//						optBuf = append(optBuf, t.CapCode)
+//						optBuf = append(optBuf, t.CapLen)
+//						optBuf = append(optBuf, t.CapValue)
+//					case CapMultiProtocol, CapCarryingLabelInfo, CapGracefulRestart, CapFourOctetASNumber, CapEnhancedRouteRefresh, CapRouteRefreshCisco:
+//						_
+//					default:
+//						t := cap.(CapUnknown)
+//						optBuf = append(optBuf, t.CapCode)
+//						optBuf = append(optBuf, t.CapLen)
+//						optBuf = append(optBuf, t.CapValue)
+//					}
+//				}
+
+				for _, b := range optBuf {
+					buf = append(buf, b)
+				}
+
+
+
+			case OptionParameterUnknown:
+				pUnknown := p.(OptionParameterUnknown)
+				optBuf := make([]byte, 2 + pUnknown.ParamLen)
+				optBuf[0] = pUnknown.ParamType
+				optBuf[1] = pUnknown.ParamLen
+				copy(optBuf[2:2 + pUnknown.ParamLen] , pUnknown.Value)
+
+				for _, b := range optBuf {
+					buf = append(buf, b)
+				}
+			}
 		}
 	}
 
@@ -1176,6 +1214,10 @@ func (msg *BGPUpdate) DecodeFromBytes(data []byte) error {
 	return nil
 }
 
+func (msg *BGPUpdate) Encode() ([]byte, error) {
+	return nil, nil
+}
+
 type BGPNotification struct {
 	ErrorCode    uint8
 	ErrorSubcode uint8
@@ -1194,11 +1236,19 @@ func (msg *BGPNotification) DecodeFromBytes(data []byte) error {
 	return nil
 }
 
+func (msg *BGPNotification) Encode() ([]byte, error) {
+	return nil, nil
+}
+
 type BGPKeepAlive struct {
 }
 
 func (msg *BGPKeepAlive) DecodeFromBytes(_ []byte) error {
 	return nil
+}
+
+func (msg *BGPKeepAlive) Encode() ([]byte, error) {
+	return nil, nil
 }
 
 type BGPRouteRefresh struct {
@@ -1217,8 +1267,13 @@ func (msg *BGPRouteRefresh) DecodeFromBytes(data []byte) error {
 	return nil
 }
 
+func (msg *BGPRouteRefresh) Encode() ([]byte, error) {
+	return nil, nil
+}
+
 type BGPBody interface {
 	DecodeFromBytes([]byte) error
+	Encode() ([]byte, error)
 }
 
 type BGPHeader struct {
@@ -1286,11 +1341,24 @@ func ParseBGPMessage(data []byte) (*BGPMessage, error) {
 func SerializeBGPMessage(msg *BGPMessage) ([]byte, error){
 
 	header, err:= msg.Header.Encode()
+	if err != nil {
+		return nil, err
+	}
 	body , err := msg.Body.Encode()
+	if err != nil {
+		return nil, err
+	}
 	data := make([]byte, len(header) + len(body))
-	append(data, header, body)
-	return data, nil
 
+	for _, b := range header {
+		data = append(data, b)
+	}
+
+	for _, b := range body {
+		data = append(data, b)
+	}
+
+	return data, nil
 }
 
 // BMP
@@ -1361,7 +1429,7 @@ type BMPRouteMonitoring struct {
 	BGPUpdate *BGPMessage
 }
 
-func (body *BMPRouteMonitoring) ParseBody(data []byte) error {
+func (body *BMPRouteMonitoring) ParseBody(msg *BMPMessage, data []byte) error {
 	update, err := ParseBGPMessage(data)
 	if err != nil {
 		return err
@@ -1406,7 +1474,7 @@ type BMPPeerDownNotification struct {
 	Data            []byte
 }
 
-func (body *BMPPeerDownNotification) ParseBody(data []byte) error {
+func (body *BMPPeerDownNotification) ParseBody(msg *BMPMessage, data []byte) error {
 	body.Reason = data[0]
 	data = data[1:]
 	if body.Reason == BMP_PEER_DOWN_REASON_LOCAL_BGP_NOTIFICATION || body.Reason == BMP_PEER_DOWN_REASON_REMOTE_BGP_NOTIFICATION {
@@ -1453,7 +1521,7 @@ func (body *BMPPeerUpNotification) ParseBody(msg *BMPMessage, data []byte) error
 	return nil
 }
 
-func (body *BMPStatisticsReport) ParseBody(data []byte) error {
+func (body *BMPStatisticsReport) ParseBody(msg *BMPMessage, data []byte) error {
 	_ = binary.BigEndian.Uint32(data[0:4])
 	data = data[4:]
 	for len(data) >= 4 {
@@ -1482,7 +1550,7 @@ type BMPInitiation struct {
 	Info []BMPTLV
 }
 
-func (body *BMPInitiation) ParseBody(data []byte) error {
+func (body *BMPInitiation) ParseBody(msg *BMPMessage, data []byte) error {
 	for len(data) >= 4 {
 		tlv := BMPTLV{}
 		tlv.Type = binary.BigEndian.Uint16(data[0:2])
@@ -1499,7 +1567,7 @@ type BMPTermination struct {
 	Info []BMPTLV
 }
 
-func (body *BMPTermination) ParseBody(data []byte) error {
+func (body *BMPTermination) ParseBody(msg *BMPMessage, data []byte) error {
 	for len(data) >= 4 {
 		tlv := BMPTLV{}
 		tlv.Type = binary.BigEndian.Uint16(data[0:2])
