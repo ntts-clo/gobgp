@@ -1,8 +1,8 @@
-package main
+package api
 
 import (
-	"log"
 	"github.com/peterh/liner"
+	"log"
 )
 
 func main() {

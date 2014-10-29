@@ -1,4 +1,5 @@
-// attributes
+/// attributes
+/*
 package ribs
 
 type Path struct {
@@ -14,3 +15,4 @@ type LocRib struct {
 	Neighbor_id string
 	Path_map    map[string]*Path
 }
+*/

@@ -2,64 +2,91 @@
 package config
 
 import (
-	"net"
+//"net"
 )
 
 type NeighborConfiguration struct {
-
-	ASNumber	int
-	PeerAddress	net.Addr
-	IPv4Enable	bool
-	IPv6Enable	bool
-	VPNv4Enable	bool
-	VPNv6Enable	bool
-	RouteServerClient	bool
-
+	UUID string
+	/*
+		ASNumber int
+		PeerAddress       net.Addr
+		IPv4Enable        bool
+		IPv6Enable        bool
+		VPNv4Enable       bool
+		VPNv6Enable       bool
+		RouteServerClient bool
+	*/
+	ASNumber          string
+	PeerAddress       string
+	IPv4Enable        string
+	IPv6Enable        string
+	VPNv4Enable       string
+	VPNv6Enable       string
+	RouteServerClient string
 }
 
 type GlobalConfiguration struct {
-
-	ID 			net.Addr
-	MyAS		int
-	HoldTime	uint16
+	ID string
+	//ID net.Addr
+	MyAS string
+	//MyAS int
+	HoldTime string
+	//HoldTime uint16
 	// need Capability
 
 }
 
 type ConfigManager struct {
-	globalConfig *GlobalConfiguration
-	neighborsConfig map[net.Addr]*NeighborConfiguration
+	GlobalConfig    *GlobalConfiguration
+	NeighborsConfig map[string]*NeighborConfiguration
 }
 
 func NewConfigManger() *ConfigManager {
 	manager := &ConfigManager{}
-	manager.globalConfig = &GlobalConfiguration{}
-	manager.neighborsConfig = make(map[net.Addr]*NeighborConfiguration)
+	manager.GlobalConfig = &GlobalConfiguration{}
+	manager.NeighborsConfig = make(map[string]*NeighborConfiguration)
 	return manager
 }
 
-func (manager *ConfigManager) AddNeighborConfiguration (neighborConfig *NeighborConfiguration){
-	addr := neighborConfig.PeerAddress
-	_, ok := manager.neighborsConfig[addr]
-	if !ok {
-		manager.neighborsConfig[addr] = neighborConfig
-	} else {
-		//TODO handle duplication error
+func (manager *ConfigManager) AddNeighborConfiguration(neighborConfig *NeighborConfiguration) bool {
+	uuid := neighborConfig.UUID
+	manager.NeighborsConfig[uuid] = neighborConfig
+	for _, neighbor := range manager.NeighborsConfig {
+		if manager.NeighborsConfig[uuid].PeerAddress == neighbor.PeerAddress {
+			return false
+		}
 	}
+	return true
 }
+func (manager *ConfigManager) FindAllNeighborConfiguration() *ConfigManager {
+	return manager
+}
+func (manager *ConfigManager) FindNeighborConfiguration(uuid string) *NeighborConfiguration {
 
-func (manager *ConfigManager) FindNeighborConfiguration(addr net.Addr) NeighborConfiguration {
-
-	conf, ok := manager.neighborsConfig[addr]
+	conf, ok := manager.NeighborsConfig[uuid]
 	if !ok {
 		return nil
 	} else {
 		return conf
 	}
 }
-
-func (manager *ConfigManager) SetGlobalConfiguration(gConfig *GlobalConfiguration){
-	manager.globalConfig = gConfig
+func (manager *ConfigManager) UpdateNeighborConfiguration(neighborConfig *NeighborConfiguration) {
+	uuid := neighborConfig.UUID
+	_, ok := manager.NeighborsConfig[uuid]
+	if !ok {
+		manager.NeighborsConfig[uuid] = neighborConfig
+	} else {
+		//TODO handle duplication error
+	}
+}
+func (manager *ConfigManager) DeleteNeighborConfiguration(uuid string) {
+	delete(manager.NeighborsConfig, uuid)
+}
+func (manager *ConfigManager) SetGlobalConfiguration(gConfig *GlobalConfiguration) {
+	manager.GlobalConfig = gConfig
 	// TODO send notification to handlers
 }
-
+func (manager *ConfigManager) GetGlobalConfiguration() *GlobalConfiguration {
+	return manager.GlobalConfig
+	// TODO send notification to handlers
+}

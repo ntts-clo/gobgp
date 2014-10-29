@@ -2,45 +2,65 @@ package core
 
 import (
 	"fmt"
-	"net"
-	"./config/common"
-	"sync"
+	"gobgp/config"
+	//"net"
+	//"sync"
 )
 
-var configManager *ConfigManager
+var configManager *config.ConfigManager
 
 func StartCoreService() {
-	configManager = NewConfigManger()
+	configManager = config.NewConfigManger()
 	// start rest server
 
 	// start listening to incoming TCP connection
 
 	//
 }
+func GetManager() *config.ConfigManager {
 
-func GetNeighbor(peerAddr net.Addr) *NeighborConfiguration {
+	manager := configManager.FindAllNeighborConfiguration()
+	return manager
 
-	nConfig := configManager.findNeighborConfiguration(peerAddr)
+}
+func GetNeighbor(uuid string) *config.NeighborConfiguration {
+
+	nConfig := configManager.FindNeighborConfiguration(uuid)
 	return nConfig
 
 }
 
-func AddNeighbor(nConfig *NeighborConfiguration) error {
+func AddNeighbor(nConfig *config.NeighborConfiguration) error {
 
-	peerAddr := nConfig.PeerAddress
-	if c := configManager.findNeighborConfiguration(peerAddr); c != nil {
+	uuid := nConfig.UUID
+	if c := configManager.FindNeighborConfiguration(uuid); c != nil {
 		return fmt.Errorf("Neighbor configuration exists.")
 	}
-	configManager.addNeighborConfiguration(nConfig)
+	if !configManager.AddNeighborConfiguration(nConfig) {
+		return fmt.Errorf("Neighbor configuration doesn't exists [ipaddress].")
+	}
 
+	return nil
 }
 
-func UpdateNeighbor(nConfig *NeighborConfiguration) error {
+func UpdateNeighbor(nConfig *config.NeighborConfiguration) error {
 
-	peerAddr := nConfig.PeerAddress
-	if c := configManager.findNeighborConfiguration(peerAddr); c == nil {
+	uuid := nConfig.UUID
+	if c := configManager.FindNeighborConfiguration(uuid); c == nil {
 		return fmt.Errorf("Neighbor configuration doesn't exists.")
 	}
-	configManager.updateNeighborConfiguration(nConfig)
-
+	configManager.UpdateNeighborConfiguration(nConfig)
+	return nil
+}
+func DeleteNeighbor(uuid string) error {
+	if c := configManager.FindNeighborConfiguration(uuid); c == nil {
+		return fmt.Errorf("Neighbor configuration doesn't exists.")
+	}
+	return nil
+}
+func GetGlobal() *config.GlobalConfiguration {
+	return configManager.GetGlobalConfiguration()
+}
+func SetGlobal(gConfig *config.GlobalConfiguration) {
+	configManager.SetGlobalConfiguration(gConfig)
 }
