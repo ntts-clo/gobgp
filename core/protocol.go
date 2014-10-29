@@ -5,7 +5,8 @@ import (
 	"net"
 	"time"
 	"log"
-	"packet/packet"
+	"../packet/"
+	"../config"
 )
 
 // BGP Finite State Machine state
@@ -29,6 +30,7 @@ const (
 	BGP_EVENT_MANUAL_STOP = 2
 	BGP_EVENT_TCP_CONNECTION_VALID = 14
 	BGP_EVENT_TCP_CONNECTION_CONFIRMED = 17
+	BGP_EVENT_TCP_CONNECTION_FAILS = 18
 )
 
 const (
@@ -39,9 +41,11 @@ const (
 
 const BGP_STANDARD_PORT = "179"
 const BGP_CONNECT_RETRY_DURATION = 60
+const BGP_TCP_CONN_TIMEOUT = 30
 
 type BGPState int
 type BGPEvent int
+type NeighborInternalEvent int
 
 type MessageHandler struct {
 	conn		*net.TCPConn
@@ -54,28 +58,25 @@ func (h *MessageHandler) initialize(conn *net.TCPConn) {
 	h.conn = conn
 }
 
-func (h *MessageHandler) receiveMessage(msgCh <- chan BGPMessage) error {
+func (h *MessageHandler) receiveMessage() (*packet.BGPMessage, error) {
 
 	//TODO support fragment packet
 	buf := make([]byte, 4096)
-	read_len, err := sock.Read(buf)
+	read_len, err := h.conn.Read(buf)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	h.bytes_in += read_len
 	fmt.Println(read_len)
-	var msg BGPMessage
-	msg = ParseBGPMessage(buf)
-	msgCh <- msg
-
-	return nil
+	msg, err := packet.ParseBGPMessage(buf)
+	return msg, err
 }
 
-func (h *MessageHandler) sendMessage(msg *BGPMessage) error {
+func (h *MessageHandler) sendMessage(msg *packet.BGPMessage) error {
 
-	data, err := SerializeBGPMessage(msg)
-	write_len, err = h.conn.Write(data)
+	data, err := packet.SerializeBGPMessage(msg)
+	write_len, err := h.conn.Write(data)
 	if err != nil {
 		return err
 	}
@@ -85,30 +86,24 @@ func (h *MessageHandler) sendMessage(msg *BGPMessage) error {
 
 }
 
-func (h *MessageHandler) run(sendCh , recvCh <- chan *BGPMessage) error {
+func (h *MessageHandler) sendKeepAlive() error {
 
-	internalCh := make(chan BGPMessage)
-	go h.receiveMessage(<-internalCh)
-	for {
-		select{
-		case msg := <- internalCh:
-			switch msg.Header.Type {
-			case BGP_MSG_UPDATE:
-			recvCh <- msg
-			case BGP_MSG_NOTIFICATION:
-			recvCh <- msg
-			case BGP_MSG_KEEPALIVE:
-				// respond to peer
-			case BGP_MSG_ROUTE_REFRESH:
-			recvCh <- msg
-			default:
-			recvCh <- msg
-			}
-		case msg := sendCh:
-			h.sendMessage(msg)
-		}
+	var keepAlive packet.BGPMessage
+	keepAlive.Header.Type = packet.BGP_MSG_KEEPALIVE
+	keepAlive.Header.Len = 19 // MSG_MIN
+
+	data, err := packet.SerializeBGPMessage(&keepAlive)
+	write_len, err := h.conn.Write(data)
+	if err != nil {
+		return err
 	}
+
+	h.bytes_out += write_len
+	return nil
+
 }
+
+
 
 func (h *MessageHandler) close() error {
 	err := h.conn.Close()
@@ -121,67 +116,95 @@ type BGPFiniteStateMachine struct {
 	previousState		BGPState
 	IsProactive			bool
 	messageHandler		*MessageHandler
-	neighborConfig		*NeighborConfiguration
-	globalConfig		*GlobalConfiguration
+	neighborConfig		*config.NeighborConfiguration
+	globalConfig		*config.GlobalConfiguration
 	connectRetryTimer	time.Timer
 	connectRetryCount	int
 	keepAliveTimer		time.Timer
 	holdTimer			time.Timer
-	receivedOpenMsg		BGPOpen
-	changeState			chan int
+	receivedOpenMsg		packet.BGPBody
+	stateChanged		chan struct{}
+	eventChannel		chan NeighborInternalEvent
+	internalSocket		net.TCPConn
+	errorOccurred		chan error
 }
 
-func (fsm *BGPFiniteStateMachine) Run(ctrlCh chan BGPEvent) {
 
-	fsm.state = BGP_FSM_IDLE
-	fsm.changeState = BGP_FSM_INTERNAL_EVT_PROCEED
+func (fsm *BGPFiniteStateMachine) Close() {
+
+	var msg packet.BGPMessage
+	var notification packet.BGPNotification
+	notification.ErrorCode = 1
+	notification.ErrorSubcode = 1
+	msg.Body = notification
+	fsm.messageHandler.sendMessage(&msg)
+
+	close(fsm.eventChannel)
+	close(fsm.errorOccurred)
+	close(fsm.stateChanged)
+}
+
+func (fsm *BGPFiniteStateMachine) Run() error {
+
+	fsm.stateChanged <- struct {}{}
 
 	for {
 		// start finite state machine
 		select {
-		case evt := <- fsm.changeState:
+		case evt := <- fsm.stateChanged:
 
-			switch fsm.state{
+			switch fsm.state {
 			case BGP_FSM_IDLE:
-				fsm.handleIdle()
+				go fsm.handleIdle()
 			case BGP_FSM_ACTIVE:
-				fsm.handleActive()
+				go fsm.handleActive()
 			case BGP_FSM_CONNECT:
-				fsm.handleConnect()
+				go fsm.handleConnect()
 			case BGP_FSM_OPENSENT:
-				fsm.handleOpenSent()
+				go fsm.handleOpenSent()
 			case BGP_FSM_OPENCONFIRM:
-				fsm.handleIdle()
+				go fsm.handleOpenConfirm()
 			case BGP_FSM_ESTABLISHED:
-				fsm.handleIdle()
+				go fsm.handleEstablished()
 			}
 
-		case ctrl <- ctrlCh:
-
+		case ctrl := <- fsm.eventChannel:
+			if ctrl == BGP_EVENT_MANUAL_STOP {
+				break
+			}
+		case err := <- fsm.errorOccurred:
+			return fmt.Errorf(err.Error())
 		}
 	}
 }
 
-func (fsm *BGPFiniteStateMachine) Initialize(sock *TCPConn, gConfig *GlobalConfiguration, nConfig *NeighborConfiguration, chan BGPEvent) {
+func (fsm *BGPFiniteStateMachine) Initialize(
+					conn *net.TCPConn,
+					isProactive bool,
+					gConfig *config.GlobalConfiguration,
+					nConfig *config.NeighborConfiguration,
+					eventCh chan NeighborInternalEvent) {
 
-	fsm.previousState = nil
+	fsm.previousState = 0
 	fsm.messageHandler = &MessageHandler{}
-	if sock != nil {
-		fsm.messageHandler.conn = sock
-		fsm.IsProactive = true
-	}
+	fsm.messageHandler.conn = conn
+	fsm.IsProactive = isProactive
 	fsm.neighborConfig = nConfig
 	fsm.globalConfig = gConfig
+	fsm.eventChannel = eventCh
+	fsm.state = BGP_FSM_IDLE
+	fsm.stateChanged = make(chan struct{})
+	fsm.errorOccurred = make(chan error)
 
 }
 
-func (fsm *BGPFiniteStateMachine) handleIdle() err {
+func (fsm *BGPFiniteStateMachine) handleIdle() {
 
 	//initialize connection
 	fsm.connectRetryCount = 0
-	fsm.connectRetryTimer = time.NewTimer(BGP_CONNECT_RETRY_DURATION)
-	fsm.previousState= BGP_FSM_IDLE
-	return nil
+	//fsm.connectRetryTimer = time.NewTimer(BGP_CONNECT_RETRY_DURATION)
+	fsm.stateChange(BGP_FSM_CONNECT)
+
 }
 
 func handleError(err error){
@@ -190,139 +213,200 @@ func handleError(err error){
 	}
 }
 
-func (fsm *BGPFiniteStateMachine) handleConnect(bgpEvent <- chan BGPEvent) err {
-	if fsm.state != BGP_FSM_IDLE || fsm.state != BGP_FSM_ACTIVE{
-		return error.New("state is not idle or active.")
+func (fsm *BGPFiniteStateMachine) handleConnect() {
+
+	if fsm.previousState != BGP_FSM_IDLE || fsm.previousState != BGP_FSM_ACTIVE{
+		fsm.errorOccurred <- fmt.Errorf("previous state is not idle or active.")
+		return
 	}
 
+	tcpEvent := make(chan int)
+	defer close(tcpEvent)
+
+//	var alreadyTimedout bool = false
+
 	go func() {
-		conn, err := net.DialTimeout("tcp",fsm.neighborConfig.PeerAddress.String(),60)
+		fsm.connectRetryCount += 1
+		conn, err := net.DialTimeout("tcp",fsm.neighborConfig.PeerAddress, BGP_TCP_CONN_TIMEOUT)
 		if err != nil {
-			//do something
-			log.Fatalln(err)
-			fsm.internalSocket = nil
+			tcpEvent <- BGP_EVENT_TCP_CONNECTION_FAILS
+			return
+		} else {
+			// set socket
+			fsm.messageHandler.conn = conn.(net.TCPConn)
+			tcpEvent <- BGP_EVENT_TCP_CONNECTION_CONFIRMED
 		}
-		fsm.internalSocket = conn
-		bgpEvent <- BGP_EVENT_TCP_CONNECTION_CONFIRMED
+
+//		if alreadyTimedout {
+//			conn.Close()
+//		} else {
+//
+//		}
 	}()
 
 	for {
 		select {
-		case evt <- bgpEvent:
+		case evt := <- tcpEvent:
 			if evt == BGP_EVENT_TCP_CONNECTION_CONFIRMED {
 				//stop ConectionRetryTimer
 				fsm.connectRetryTimer.Stop()
-				var openMsg *BGPOpen = new(BGPOpen)
+				var openMsg *packet.BGPOpen = new(packet.BGPOpen)
 				openMsg.MyAS = fsm.globalConfig.MyAS
 				openMsg.ID = fsm.globalConfig.ID
 				openMsg.Version = 4
 				openMsg.HoldTime = fsm.globalConfig.HoldTime
-				data, err:= openMsg.Encode()
+				err := fsm.messageHandler.sendMessage(*packet.BGPMessage(openMsg))
 				handleError(err)
-
-				//stop connectRetryTimer
-				fsm.connectRetryTimer.Stop()
-				err = fsm.internalSocket.Write(data)
-				if err != nil {
-					return err
-				}
-
 				fsm.holdTimer = time.NewTimer(time.Minute * 4)
+				fsm.stateChange(BGP_FSM_OPENSENT)
+
+				break
+			} else if evt == BGP_EVENT_TCP_CONNECTION_FAILS {
+				fsm.connectRetryTimer.Reset(BGP_CONNECT_RETRY_DURATION)
+				fsm.stateChange(BGP_FSM_ACTIVE)
 				break
 			}
-		case <- fsm.connectRetryTimer.C:
-			// go to Active state
-
+//		case <- fsm.connectRetryTimer.C:
+//			// go to Active state
+//			alreadyTimedout = true
 		}
 	}
-	return nil
+	return
 }
 
-func (fsm *BGPFiniteStateMachine) handleOpenSent(bgpEvent <- chan BGPEvent) error {
-	if fsm.previousState != BGP_FSM_CONNECT || fsm.previousState != BGP_FSM_ACTIVE {
-		return error.New("previous state is not valid.")
-	}
-	recvCh := make(chan struct{})
+func (fsm *BGPFiniteStateMachine) stateChange(newState BGPState){
+	fsm.previousState = fsm.state
+	fsm.state = newState
+	fsm.stateChanged <- struct{} {}
+}
 
-	go func() {
-		sock := fsm.internalSocket
-		buf := make([]byte, 4096)
-		read_len, err := sock.Read(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println(read_len)
-		var openMsg *BGPOpen = new(BGPOpen)
-		openMsg.DecodeFromBytes(buf)
-		fsm.receivedOpenMsg = openMsg
-		recvCh <- struct{}
-	}()
+func (fsm *BGPFiniteStateMachine) handleActive() {
+	if fsm.previousState != BGP_FSM_IDLE || fsm.previousState != BGP_FSM_CONNECT{
+		fsm.errorOccurred <- fmt.Errorf("previous state is not idle or connect.")
+		return
+	}
 
 	for {
 		select {
-		case evt := <- bgpEvent:
-			if evt == BGP_EVENT_MANUAL_STOP {
-				//go to IdleState
-				//
+		case <- fsm.connectRetryTimer.C:
+			fsm.stateChange(BGP_FSM_CONNECT)
+			break
+		}
+	}
+}
+
+func (fsm *BGPFiniteStateMachine) handleOpenSent() {
+
+	if fsm.previousState != BGP_FSM_CONNECT || fsm.previousState != BGP_FSM_ACTIVE {
+		fsm.errorOccurred <- fmt.Errorf("previous state is not connect or active.")
+		return
+	}
+
+	recvCh := make(chan *packet.BGPMessage)
+	defer close(recvCh)
+	go fsm.receiveMessage(recvCh, false)
+
+	for {
+		select {
+		case ctrl := <- fsm.eventChannel:
+			if ctrl == BGP_EVENT_MANUAL_STOP {
+				break
 			}
-		case <-recvCh:
+		case msg := <- recvCh:
+
+			fsm.receivedOpenMsg = packet.BGPOpen(msg.Body)
+
 			holdtime := fsm.receivedOpenMsg.HoldTime
 			if holdtime < fsm.globalConfig.HoldTime {
 				holdtime = fsm.globalConfig.HoldTime
 			}
+
 			// send KeepAlive message
-			var keepAlive BGPMessage
-			keepAlive.Header.Type = BGP_MSG_KEEPALIVE
-			keepAlive.Header.Len = 19 // MSG_MIN
-			data := keepAlive.Encode()
-			fsm.internalSocket.Write(data)
-
-			// set connectretrytimer
-			// set holdtimer
-			// set keepalivetimer
-
-			fsm.previousState = fsm.state
-			fsm.state = BGP_FSM_OPENCONFIRM
+			fsm.messageHandler.sendKeepAlive()
+			fsm.stateChange(BGP_FSM_OPENCONFIRM)
 			break
 		}
 	}
-	return nil
 }
 
-func (fsm *BGPFiniteStateMachine) handleOpenConfirm(bgpEvent <- chan BGPEvent) err {
+func (fsm *BGPFiniteStateMachine) handleOpenConfirm() {
+
 	if fsm.previousState != BGP_FSM_OPENSENT {
-		return error.New("previous state is not valid.")
+		fsm.errorOccurred <- fmt.Errorf("previous state is not opensent.")
+		return
 	}
 
-	recvCh := make(chan BGPMessage)
-
-	go func() {
-		sock := fsm.internalSocket
-		buf := make([]byte, 4096)
-		read_len, err := sock.Read(buf)
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println(read_len)
-		openMsg ,err := ParseBGPMessage(buf)
-		recvCh <- openMsg
-	}()
+	recvCh := make(chan packet.BGPMessage)
+	defer recvCh.Close()
+	go fsm.receiveMessage(recvCh, false)
 
 	for {
 		select {
-		case evt <- bgpEvent:
-			if evt == BGP_EVENT_MANUAL_STOP {
-				//go to IdleState
-				//
+		case ctrl := <- fsm.eventChannel:
+			if ctrl == BGP_EVENT_MANUAL_STOP {
+				break
 			}
 		case msg := <-recvCh:
-
-			fsm.previousState = fsm.state
-			fsm.state = BGP_FSM_ESTABLISHED
+			switch msg.Header.Type {
+			case BGP_MSG_NOTIFICATION:
+				msg.Body = &packet.BGPNotification{}
+			case BGP_MSG_KEEPALIVE:
+				fsm.stateChange(BGP_FSM_ESTABLISHED)
+			default:
+				fsm.errorOccurred <- fmt.Errorf("invalid message.")
+			}
 			break
 		}
 	}
-	return nil
+	return
 }
 
+func (fsm *BGPFiniteStateMachine) handleEstablished() {
 
+	if fsm.previousState != BGP_FSM_OPENCONFIRM {
+		fsm.errorOccurred <- fmt.Errorf("previous state is not openconfirm.")
+		return
+	}
+
+	recvCh := make(chan packet.BGPMessage)
+	defer recvCh.Close()
+	go fsm.receiveMessage(recvCh, true)
+
+	for {
+		select {
+		case ctrl := <- fsm.eventChannel:
+			if ctrl == BGP_EVENT_MANUAL_STOP {
+				break
+			}
+		case msg := <-recvCh:
+			switch msg.Header.Type {
+			case BGP_MSG_NOTIFICATION:
+				//do something
+				break
+			case BGP_MSG_KEEPALIVE:
+				fsm.messageHandler.sendKeepAlive()
+			case BGP_MSG_UPDATE:
+				//do handleUpdate
+			default:
+				fsm.errorOccurred <- fmt.Errorf("invalid message.")
+			}
+		}
+	}
+	return
+}
+
+func (fsm *BGPFiniteStateMachine) receiveMessage(recvCh chan *packet.BGPMessage, forever bool){
+	for {
+
+		msg, err := fsm.messageHandler.receiveMessage()
+		if err != nil {
+			fsm.errorOccurred <- err
+			return
+		}
+		recvCh <- msg
+		if !forever {
+			break
+		}
+
+	}
+}
